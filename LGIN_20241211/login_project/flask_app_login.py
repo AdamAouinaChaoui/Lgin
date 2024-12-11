@@ -1,42 +1,79 @@
-#!/usr/bin/env python3
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
-from flask import Flask, request, render_template
-import sqlite3
-import datetime
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-login_app = Flask(__name__)
+db = SQLAlchemy(app)
 
-db_name = 'user.db'
+# Database Model
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False, unique=True)
+    password = db.Column(db.String(150), nullable=False)
 
-#### RE-INITIALIZING DATABASE => deleting all records from test database
-@login_app.route('/delete/all', methods=['POST', 'DELETE'])
-def delete_all():
-    db_conn = sqlite3.connect(db_name)
-    c = db_conn.cursor()
-    sql_statement = "DELETE FROM USER_PLAIN ;"
-    c.execute(sql_statement)
-    sql_statement = "DELETE FROM USER_HASH ;"
-    c.execute(sql_statement)
-    db_conn.commit()
-    db_conn.close()
-    return "Test records deleted\n"
+# Routes
+@app.route('/')
+def index():
+    return redirect(url_for('login'))
 
-@login_app.route('/')
-def account():
-    return render_template("index.html")
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
+        
+        if User.query.filter_by(username=username).first():
+            flash('Username already exists!', 'danger')
+            return redirect(url_for('register'))
+        
+        new_user = User(username=username, password=hashed_password)
+        db.session.add(new_user)
+        db.session.commit()
+        
+        flash('Account created successfully! Please log in.', 'success')
+        return redirect(url_for('login'))
+    
+    return render_template('register.html')
 
-@login_app.route('/login')
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    return render_template("login.html")
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        user = User.query.filter_by(username=username).first()
+        if user and check_password_hash(user.password, password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            flash('Logged in successfully!', 'success')
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid username or password!', 'danger')
+    
+    return render_template('login.html')
 
-@login_app.route('/map')
-def map_page():
-    return render_template("map.html")
+@app.route('/dashboard')
+def dashboard():
+    if 'user_id' not in session:
+        flash('Please log in to access this page.', 'warning')
+        return redirect(url_for('login'))
+    
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return render_template('dashboard.html', username=session['username'], current_time=current_time)
 
-@login_app.route('/time')
-def time_page():
-    return render_template("time.html", datetime_now = datetime.datetime.now())
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('Logged out successfully!', 'success')
+    return redirect(url_for('login'))
 
-#### MAIN
-if __name__ == "__main__":
-    login_app.run(host="0.0.0.0", port=5555, debug=True)
+if __name__ == '__main__':
+    with app.app_context():  # Set up the application context
+        db.create_all()      # Create the database tables
+    app.run(debug=True)
